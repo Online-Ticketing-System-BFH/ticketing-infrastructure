@@ -160,31 +160,31 @@ services:
       - ticketing_network
     restart: unless-stopped
 
-  booking-worker:
-    build:
-      context: ../highload-booking/booking-service
-      dockerfile: Dockerfile
-    container_name: booking-worker
-    command: python -m app.workers.expiry_worker
-    environment:
-      DATABASE_URL: postgresql+asyncpg://booking_user:booking_pass@booking-db:5432/booking_db
-      REDIS_URL: redis://redis:6379/0
-      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
-      RABBITMQ_EXCHANGE: ticketing_events
-      RESERVATION_TIMEOUT_MINUTES: 10
-      EXPIRY_WORKER_INTERVAL_SECONDS: 30
-      EXPIRY_BATCH_SIZE: 100
-      SECRET_KEY: dev-secret-key-change-in-production
-      LOG_LEVEL: INFO
-      LOG_FORMAT: json
-    depends_on:
-      - booking-service
-      - booking-db
-      - redis
-      - rabbitmq
-    networks:
-      - ticketing_network
-    restart: unless-stopped
+  # booking-worker:
+  #   build:
+  #     context: ../highload-booking/booking-service
+  #     dockerfile: Dockerfile
+  #   container_name: booking-worker
+  #   command: python -m app.workers.expiry_worker
+  #   environment:
+  #     DATABASE_URL: postgresql+asyncpg://booking_user:booking_pass@booking-db:5432/booking_db
+  #     REDIS_URL: redis://redis:6379/0
+  #     RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+  #     RABBITMQ_EXCHANGE: ticketing_events
+  #     RESERVATION_TIMEOUT_MINUTES: 10
+  #     EXPIRY_WORKER_INTERVAL_SECONDS: 30
+  #     EXPIRY_BATCH_SIZE: 100
+  #     SECRET_KEY: dev-secret-key-change-in-production
+  #     LOG_LEVEL: INFO
+  #     LOG_FORMAT: json
+  #   depends_on:
+  #     - booking-service
+  #     - booking-db
+  #     - redis
+  #     - rabbitmq
+  #   networks:
+  #     - ticketing_network
+  #   restart: unless-stopped
 
 networks:
   ticketing_network:
