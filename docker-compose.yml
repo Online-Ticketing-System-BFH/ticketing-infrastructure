@@ -1,0 +1,197 @@
+# Root Docker Compose for Ticketing System
+# Orchestrates Event Service and Booking Service with shared infrastructure
+
+services:
+  # Shared RabbitMQ Message Broker
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: ticketing-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    ports:
+      - "5672:5672" 
+      - "15672:15672" # Management UI (http://localhost:15672)
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ticketing_network
+    restart: unless-stopped
+
+  # Shared Redis Cache (used by Booking Service)
+  redis:
+    image: redis:7-alpine
+    container_name: ticketing-redis
+    command: redis-server --maxmemory 2gb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - ticketing_network
+    restart: unless-stopped
+
+  event-db:
+    image: postgres:15-alpine
+    container_name: event-service-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: event_service
+    ports:
+      - "5433:5432"  # Different external port to avoid conflict
+    volumes:
+      - event_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ticketing_network
+    restart: unless-stopped
+
+  event-service:
+    build:
+      context: ../highload-event
+      dockerfile: Dockerfile
+    container_name: event-service
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@event-db:5432/event_service
+      DEBUG: "True"
+      HOST: 0.0.0.0
+      PORT: 8000
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: guest
+      RABBITMQ_PASSWORD: guest
+      RABBITMQ_EXCHANGE: ticketing_events
+      RABBITMQ_QUEUE: event_service_queue
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    ports:
+      - "8000:8000"
+    depends_on:
+      event-db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    volumes:
+      - ../highload-event/app:/app/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    networks:
+      - ticketing_network
+    restart: unless-stopped
+
+  booking-db:
+    image: postgres:16-alpine
+    container_name: booking-service-db
+    environment:
+      POSTGRES_USER: booking_user
+      POSTGRES_PASSWORD: booking_pass
+      POSTGRES_DB: booking_db
+    ports:
+      - "5434:5432"  # Different external port
+    volumes:
+      - booking_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U booking_user -d booking_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ticketing_network
+    restart: unless-stopped
+
+  booking-service:
+    build:
+      context: ../highload-booking/booking-service
+      dockerfile: Dockerfile
+    container_name: booking-service
+    environment:
+      APP_NAME: booking-service
+      APP_VERSION: 1.0.0
+      DEBUG: "True"
+      ENVIRONMENT: development
+      # Database
+      DATABASE_URL: postgresql+asyncpg://booking_user:booking_pass@booking-db:5432/booking_db
+      # Redis
+      REDIS_URL: redis://redis:6379/0
+      # RabbitMQ
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      RABBITMQ_EXCHANGE: ticketing_events
+      # External Services
+      EVENT_SERVICE_URL: http://event-service:8000
+      # Settings
+      RESERVATION_TIMEOUT_MINUTES: 10
+      EXPIRY_WORKER_INTERVAL_SECONDS: 30
+      # Mock Payment
+      MOCK_PAYMENT_ENABLED: "True"
+      MOCK_PAYMENT_SUCCESS_RATE: 0.9
+      # Security
+      SECRET_KEY: dev-secret-key-change-in-production
+      # Logging
+      LOG_LEVEL: INFO
+      LOG_FORMAT: json
+      # Monitoring
+      ENABLE_METRICS: "True"
+    ports:
+      - "8001:8001"
+    depends_on:
+      booking-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      event-service:
+        condition: service_started
+    networks:
+      - ticketing_network
+    restart: unless-stopped
+
+  booking-worker:
+    build:
+      context: ../highload-booking/booking-service
+      dockerfile: Dockerfile
+    container_name: booking-worker
+    command: python -m app.workers.expiry_worker
+    environment:
+      DATABASE_URL: postgresql+asyncpg://booking_user:booking_pass@booking-db:5432/booking_db
+      REDIS_URL: redis://redis:6379/0
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      RABBITMQ_EXCHANGE: ticketing_events
+      RESERVATION_TIMEOUT_MINUTES: 10
+      EXPIRY_WORKER_INTERVAL_SECONDS: 30
+      EXPIRY_BATCH_SIZE: 100
+      SECRET_KEY: dev-secret-key-change-in-production
+      LOG_LEVEL: INFO
+      LOG_FORMAT: json
+    depends_on:
+      - booking-service
+      - booking-db
+      - redis
+      - rabbitmq
+    networks:
+      - ticketing_network
+    restart: unless-stopped
+
+networks:
+  ticketing_network:
+    external: true
+
+volumes:
+  event_postgres_data:
+  booking_postgres_data:
+  redis_data:
+  rabbitmq_data:
